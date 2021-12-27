@@ -1,13 +1,14 @@
 const fs = require('fs');
 const path = require('path');
+const stream = require('stream');
 const rimraf = require('rimraf');
 const axios = require('axios');
 const WORK_DIR = path.resolve(__dirname, './__installer');
 
-const mkdir = path => new Promise(r => fs.mkdir(path, r));
-const rm = path => new Promise(r => rimraf(path, r));
+const mkdir = filePath => new Promise(r => fs.mkdir(filePath, r));
+const rm = filePath => new Promise(r => rimraf(filePath, r));
 
-async function githubApi(app, path) {
+async function githubApi(app, uri, saveDest) {
   const result = {};
 
   if (app && app.source) {
@@ -24,19 +25,36 @@ async function githubApi(app, path) {
         }
       };
 
-      try {
-        const response = await axios.get(`${repoUrlBase}${path}`, options);
-        if (response.status === 200 && response.data) {
-          result.data = response.data;
+      if (saveDest) {
+        try {
+          options.headers = { 'Accept': 'application/octet-stream' };
+          options.responseType = 'stream';
+          const writer = fs.createWriteStream(path.resolve(saveDest));
+          const response = await axios.get(`${repoUrlBase}${uri}`, options);
+
+          await new Promise(r => stream.pipeline(response.data, writer, r));
         }
-        else {
-          console.error('API request failed');
+        catch (error) {
+          console.error(`Unable to download file`);
+          console.log(error);
           result.failed = true;
         }
       }
-      catch (error) {
-        console.error(`Unable to access git repository at ${repoUrlBase} [${error?.response?.status || 0}]`);
-        result.failed = true;
+      else {
+        try {
+          const response = await axios.get(`${repoUrlBase}${uri}`, options);
+          if (response.status === 200 && response.data) {
+            result.data = response.data;
+          }
+          else {
+            console.error('API request failed');
+            result.failed = true;
+          }
+        }
+        catch (error) {
+          console.error(`[${error?.response?.status || 0}] API request failed for ${repoUrlBase}${uri}`);
+          result.failed = true;
+        }
       }
     }
     else {
@@ -124,11 +142,12 @@ async function install(app, release) {
 
     console.log(`Getting assets for ${app.name} version ${release.tag}...`);
 
-    const assetInfo = await githubApi(app, `/${release.id}/assets`);
+    const assetInfo = await githubApi(app, `/releases/${release.id}/assets`);
 
     if (assetInfo.data && assetInfo.data.length > 0) {
       for (let i = 0; i < assetInfo.data.length; i++){
-        const artifact = await githubApi(app, `/assets/${assetInfo.data[i].id}`);
+        console.log(`Downloading ${assetInfo.data[i].name}...`);
+        await githubApi(app, `/releases/assets/${assetInfo.data[i].id}`, `${WORK_DIR}/${assetInfo.data[i].name}`);
         // download as file (application/octet-stream)
       }
     }

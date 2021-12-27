@@ -21,7 +21,7 @@ init().then(() => {
 async function init() {
   const test = await releaseManager.getInfo(config.apps[0]);
 
-  console.dir(test, { depth: null });
+  //console.dir(test, { depth: null });
 
   await releaseManager.install(config.apps[0], test.remote.all[0]);
 }
