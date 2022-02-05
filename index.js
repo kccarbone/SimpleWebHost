@@ -23,5 +23,5 @@ async function init() {
 
   //console.dir(test, { depth: null });
 
-  await releaseManager.install(config.apps[0], test.remote.all[0]);
+  await releaseManager.install(config.apps[0], '0.0.11');
 }

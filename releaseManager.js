@@ -1,12 +1,49 @@
+const cproc = require("child_process");
 const fs = require('fs');
 const path = require('path');
 const stream = require('stream');
 const rimraf = require('rimraf');
 const axios = require('axios');
+const unzip = require('extract-zip');
+const APP_DIR = path.resolve(__dirname, './apps');
 const WORK_DIR = path.resolve(__dirname, './__installer');
 
+const exec = (cmd, dir) => new Promise(r => cproc.exec(cmd, { cwd: dir }, (_, out) => r(out)));
+const copyFile = (src, dest) => new Promise(r => fs.copyFile(src, dest, r));
+const readFile = (filePath, enc) => new Promise(r => fs.readFile(filePath, enc, (_, data) => r(data)));
+const writeFile = (filePath, content) => new Promise(r => fs.writeFile(filePath, content, (_, data) => r(data)));
+const readdir = filePath => new Promise(r => fs.readdir(filePath, (_, data) => r(data)));
+const lstat = filePath => new Promise(r => fs.lstat(filePath, (_, data) => r(data)));
 const mkdir = filePath => new Promise(r => fs.mkdir(filePath, r));
 const rm = filePath => new Promise(r => rimraf(filePath, r));
+
+async function readJson(filePath, encoding = 'utf8') {
+  if (fs.existsSync(filePath)) {
+    const rawData = await readFile(filePath, encoding);
+
+    if (rawData) {
+      return JSON.parse(rawData);
+    }
+  }
+}
+
+async function copyFolder(src, dest) {
+  const contents = await readdir(src);
+  await mkdir(dest);
+
+  for (let i = 0; i < contents.length; i++) {
+    const sourcePath = path.resolve(src, contents[i]);
+    const destPath = path.resolve(dest, contents[i]);
+    const item = await lstat(sourcePath);
+
+    if (item.isFile()) {
+      await copyFile(sourcePath, destPath);
+    }
+    else {
+      await copyFolder(sourcePath, destPath);
+    }
+  }
+}
 
 async function githubApi(app, uri, saveDest) {
   const result = {};
@@ -72,29 +109,22 @@ async function githubApi(app, uri, saveDest) {
 
 async function getInfo(app) {
   const result = {};
+  await mkdir(APP_DIR);
 
-  if (app && app.name && app.source && app.localPath) {
+  if (app && app.name && app.source) {
     console.log(`Getting release info for ${app.name}...`);
-    const localVersionFile = path.resolve(__dirname, app.localPath, '_VERSION');
+    const localVersion = await readJson(path.resolve(APP_DIR, app.name, '_VERSION'));
     result.local = {};
     result.remote = {};
-    
-    if (fs.existsSync(localVersionFile)) {
-      const localVersion = JSON.parse(fs.readFileSync(localVersionFile, 'utf8'));
 
-      if (localVersion && localVersion.tag) {
-        console.log(`Local version: ${localVersion.tag}`);
-        const { tag, installDate } = localVersion;
-        result.local.status = 'installed';
-        result.local.tag = tag;
+    if (localVersion?.tag) {
+      console.log(`Local version: ${localVersion.tag}`);
+      const { tag, installDate } = localVersion;
+      result.local.status = 'installed';
+      result.local.tag = tag;
 
-        if (Date.parse(installDate)) {
-          result.local.installDate = new Date(installDate);
-        }
-      }
-      else {
-        console.log('Invalid version file!');
-        result.local.status = 'invalid';
+      if (Date.parse(installDate)) {
+        result.local.installDate = new Date(installDate);
       }
     }
     else {
@@ -135,24 +165,83 @@ async function getInfo(app) {
 async function install(app, release) {
   const result = {};
 
-  if (app && app.name && app.source && app.localPath && release && release.id && release.tag) {
-    console.log('Cleaning workspace...');
-    await rm(WORK_DIR);
-    await mkdir(WORK_DIR);
+  if (app && app.name && app.source) {
+    const currentState = await getInfo(app);
 
-    console.log(`Getting assets for ${app.name} version ${release.tag}...`);
+    if ((currentState?.remote?.all || []).length > 0) {
+      const releaseList = currentState.remote.all;
+      let releaseTarget;
 
-    const assetInfo = await githubApi(app, `/releases/${release.id}/assets`);
+      if (typeof release === 'string') {
+        releaseTarget = releaseList.find(x => x.tag === release);
+      }
+      else if (typeof release === 'number') {
+        releaseTarget = releaseList.find(x => x.id === release);
+      }
+      else {
+        releaseTarget = releaseList[0];
+      }
 
-    if (assetInfo.data && assetInfo.data.length > 0) {
-      for (let i = 0; i < assetInfo.data.length; i++){
-        console.log(`Downloading ${assetInfo.data[i].name}...`);
-        await githubApi(app, `/releases/assets/${assetInfo.data[i].id}`, `${WORK_DIR}/${assetInfo.data[i].name}`);
-        // download as file (application/octet-stream)
+      if (releaseTarget?.id) {
+        if (currentState?.local?.tag !== releaseTarget?.tag) {
+          console.log(`== Preparing to update '${app.name}' to version ${releaseTarget.tag} ==`);
+          console.log('Cleaning workspace...');
+          await rm(WORK_DIR);
+          await mkdir(WORK_DIR);
+
+          console.log('Fetching manifest...');
+
+          const assetInfo = await githubApi(app, `/releases/${releaseTarget.id}/assets`);
+
+          if (assetInfo.data && assetInfo.data.length > 0) {
+            for (let i = 0; i < assetInfo.data.length; i++) {
+              const asset = assetInfo.data[i];
+              console.log(`Downloading ${asset.name}...`);
+              await githubApi(app, `/releases/assets/${asset.id}`, `${WORK_DIR}/${asset.name}`);
+              if (/\.zip$/.test(asset.name)) {
+                console.log(`Extracting ${asset.name}...`);
+                await unzip(`${WORK_DIR}/${asset.name}`, { dir: WORK_DIR });
+                await rm(`${WORK_DIR}/${asset.name}`);
+              }
+            }
+          }
+          else {
+            console.error('Unable to fetch assets for this version');
+            result.failed = true;
+          }
+
+          if (app.commands?.setup) {
+            console.log('Running setup...');
+            const test = await exec(app.commands.setup, WORK_DIR);
+            console.dir(test, { depth: null });
+          }
+
+          console.log('Replacing old version...');
+          const appBase = path.resolve(APP_DIR, app.name);
+          await rm(appBase);
+          await mkdir(appBase);
+          await copyFolder(WORK_DIR, appBase);
+        
+          console.log('Tagging new copy...');
+          const versionFile = path.resolve(appBase, '_VERSION');
+          const tagData = JSON.stringify({
+            tag: releaseTarget.tag,
+            installDate: new Date()
+          }, null, '\t');
+          await writeFile(versionFile, tagData);
+          console.log('== Update successful ==');
+        }
+        else {
+          console.log(`Version ${releaseTarget.tag} is already installed`);
+        }
+      }
+      else {
+        console.error(`Could not find a matching release for ${release}`);
+        result.failed = true;
       }
     }
     else {
-      console.error('Unable to fetch assets for this version');
+      console.error('Could not fetch release list');
       result.failed = true;
     }
   }
