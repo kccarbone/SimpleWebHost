@@ -48,10 +48,10 @@ async function copyFolder(src, dest) {
 async function githubApi(app, uri, saveDest) {
   const result = {};
 
-  if (app && app.source) {
+  if (app?.source) {
     const repo = (app.source?.repository || '').match(/^.*github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)(?:\/|\#|$)/);
 
-    if (repo && repo.length > 2) {
+    if (repo?.length > 2) {
       const repoUrlBase = `https://api.github.com/repos/${repo[1]}/${repo[2]}`;
       const options = {};
 
@@ -111,7 +111,7 @@ async function getInfo(app) {
   const result = {};
   await mkdir(APP_DIR);
 
-  if (app && app.name && app.source) {
+  if (app?.name && app?.source) {
     console.log(`Getting release info for ${app.name}...`);
     const localVersion = await readJson(path.resolve(APP_DIR, app.name, '_VERSION'));
     result.local = {};
@@ -165,7 +165,7 @@ async function getInfo(app) {
 async function install(app, release) {
   const result = {};
 
-  if (app && app.name && app.source) {
+  if (app?.name && app?.source) {
     const currentState = await getInfo(app);
 
     if ((currentState?.remote?.all || []).length > 0) {
@@ -253,8 +253,15 @@ async function install(app, release) {
   return result;
 }
 
+async function clean() {
+  console.log('Cleaning work directory...');
+  await rm(WORK_DIR);
+  console.log('Cleaning app directory...');
+  await rm(APP_DIR);
+}
 
 module.exports = {
   getInfo,
-  install
+  install,
+  clean
 };
