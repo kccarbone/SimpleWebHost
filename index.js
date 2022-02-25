@@ -20,9 +20,9 @@ const abs = relativePath => path.resolve(__dirname, relativePath);
 //});
 
 init().then(() => {
-  server.listen(config.serverPort, async callback => {
-    console.log(`Server running on port ${config.serverPort}`);
-  });
+  //server.listen(config.serverPort, async callback => {
+  //  console.log(`Server running on port ${config.serverPort}`);
+  //});
 });
 
 async function init() {
@@ -30,12 +30,20 @@ async function init() {
 
   //console.dir(test, { depth: null });
 
-  const result = await releaseManager.install(config.apps[0]);
+  if (config.apps?.length) {
+    for (let i = 0; i < config.apps.length; i++) {
+      const app = config.apps[i];
+      const result = await releaseManager.install(app);
 
-  console.dir(result, { depth: null });
+      //console.dir(result, { depth: null });
 
-  if (!result.failed) {
-    wireUp(config.apps[0]);
+      if (!result.failed) {
+        //wireUp(app);
+      }
+    }
+  }
+  else {
+    console.log('No apps configured!');
   }
 }
 
@@ -55,3 +63,8 @@ function wireUp(app) {
     console.error('Invalid app configuration!');
   }
 }
+
+process.on('SIGINT', function () {
+  console.log('Service shutting down!');
+  process.exit(0);
+});

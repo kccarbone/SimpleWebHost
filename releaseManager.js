@@ -8,7 +8,7 @@ const unzip = require('extract-zip');
 const APP_DIR = path.resolve(__dirname, './apps');
 const WORK_DIR = path.resolve(__dirname, './__installer');
 
-const exec = (cmd, dir) => new Promise(r => cproc.exec(cmd, { cwd: dir }, (_, out) => r(out)));
+const exec = (cmd, cwd) => new Promise(r => cproc.exec(cmd, { cwd }, (_, out) => r(out)));
 const copyFile = (src, dest) => new Promise(r => fs.copyFile(src, dest, r));
 const readFile = (filePath, enc) => new Promise(r => fs.readFile(filePath, enc, (_, data) => r(data)));
 const writeFile = (filePath, content) => new Promise(r => fs.writeFile(filePath, content, (_, data) => r(data)));
@@ -210,29 +210,37 @@ async function install(app, release) {
             result.failed = true;
           }
 
-          if (app.commands?.setup) {
-            console.log('Running setup...');
-            const test = await exec(app.commands.setup, WORK_DIR);
-            console.dir(test, { depth: null });
-          }
-
-          console.log('Replacing old version...');
-          const appBase = path.resolve(APP_DIR, app.name);
-          await rm(appBase);
-          await mkdir(appBase);
-          await copyFolder(WORK_DIR, appBase);
+          if (!result.failed) {
+            console.log('Replacing old version...');
+            const appBase = path.resolve(APP_DIR, app.name);
+            await rm(appBase);
+            await mkdir(appBase);
+            await copyFolder(WORK_DIR, appBase);
+            
+            if (app.commands?.setup) {
+              console.log('Running setup...');
+              const test = await exec(app.commands.setup, appBase);
+              console.dir(test, { depth: null });
+            }
         
-          console.log('Tagging new copy...');
-          const versionFile = path.resolve(appBase, '_VERSION');
-          const tagData = JSON.stringify({
-            tag: releaseTarget.tag,
-            installDate: new Date()
-          }, null, '\t');
-          await writeFile(versionFile, tagData);
-          console.log('== Update successful ==');
+            console.log('Tagging new copy...');
+            const versionFile = path.resolve(appBase, '_VERSION');
+            const tagData = JSON.stringify({
+              tag: releaseTarget.tag,
+              installDate: new Date()
+            }, null, '\t');
+            await writeFile(versionFile, tagData);
+
+            console.log('Cleaning up...');
+            await rm(WORK_DIR);
+
+            console.log('== Update successful ==');
+            tryStart(app);
+          }
         }
         else {
           console.log(`Version ${releaseTarget.tag} is already installed`);
+          tryStart(app);
         }
       }
       else {
@@ -251,6 +259,20 @@ async function install(app, release) {
   }
 
   return result;
+}
+
+function tryStart(app) {
+  if (app?.name && app?.commands?.start) {
+    console.log(`Starting app '${app.name}'...`);
+    const cwd = path.resolve(APP_DIR, app.name);
+    const args = app.commands.start.split(' ');
+    const command = args.shift();
+    const proc = cproc.spawn(command, args, { cwd });
+    proc.stdout.on('data', txt => console.log('out-> ' + txt.toString()));
+    proc.stderr.on('data', txt => console.log('err-> ' + txt.toString()));
+    proc.on('close', code => console.log(`process exited with code ${code}`));
+    //setTimeout(() => proc.kill('SIGINT'), 2000);
+  }
 }
 
 async function clean() {
