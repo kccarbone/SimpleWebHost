@@ -8,6 +8,7 @@ const unzip = require('extract-zip');
 const APP_DIR = path.resolve(__dirname, './apps');
 const WORK_DIR = path.resolve(__dirname, './__installer');
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 const exec = (cmd, cwd) => new Promise(r => cproc.exec(cmd, { cwd }, (_, out) => r(out)));
 const copyFile = (src, dest) => new Promise(r => fs.copyFile(src, dest, r));
 const readFile = (filePath, enc) => new Promise(r => fs.readFile(filePath, enc, (_, data) => r(data)));
@@ -211,6 +212,8 @@ async function install(app, release) {
           }
 
           if (!result.failed) {
+            await tryStop(app);
+
             console.log('Replacing old version...');
             const appBase = path.resolve(APP_DIR, app.name);
             await rm(appBase);
@@ -271,7 +274,46 @@ function tryStart(app) {
     proc.stdout.on('data', txt => console.log('out-> ' + txt.toString()));
     proc.stderr.on('data', txt => console.log('err-> ' + txt.toString()));
     proc.on('close', code => console.log(`process exited with code ${code}`));
-    //setTimeout(() => proc.kill('SIGINT'), 2000);
+    app.proc = proc;
+  }
+}
+
+async function tryStop(app) {
+  if (app?.name && app?.proc) {
+    console.log(`Stopping app '${app.name}'...`);
+    
+    const startTime = performance.now();
+    let running = true;
+
+    const watch = new Promise(done => {
+      app.proc.on('exit', (code, signal) => {
+        const runTime = Math.floor(performance.now() - startTime);
+        console.log(`Process stoped in ${runTime}ms (code ${code} - ${signal})`);
+        running = false;
+        done();
+      });
+    });
+    
+    const escalation = async () => {
+      console.log('Sending SIGINT...');
+      app.proc.kill('SIGINT');
+      await sleep(3000);
+      if (running) {
+        console.log('Sending SIGTERM...');
+        app.proc.kill('SIGTERM');
+        await sleep(3000);
+        if (running) {
+          console.log('Sending SIGKILL...');
+          app.proc.kill('SIGKILL');
+          await sleep(3000);
+          if (running) {
+            throw Error(`Unable to kill process for '${app.name}'`);
+          }
+        }
+      }
+    };
+
+    return Promise.race([watch, escalation()]);
   }
 }
 
@@ -285,5 +327,7 @@ async function clean() {
 module.exports = {
   getInfo,
   install,
+  tryStart,
+  tryStop,
   clean
 };
