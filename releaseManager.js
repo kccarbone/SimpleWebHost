@@ -167,6 +167,7 @@ async function install(app, release) {
   const result = {};
 
   if (app?.name && app?.source) {
+    app.status = 'updating';
     const currentState = await getInfo(app);
 
     if ((currentState?.remote?.all || []).length > 0) {
@@ -238,12 +239,11 @@ async function install(app, release) {
             await rm(WORK_DIR);
 
             console.log('== Update successful ==');
-            tryStart(app);
+            await tryStart(app);
           }
         }
         else {
           console.log(`Version ${releaseTarget.tag} is already installed`);
-          tryStart(app);
         }
       }
       else {
@@ -261,11 +261,12 @@ async function install(app, release) {
     result.failed = true;
   }
 
+  app.status = result.failed ? 'missing' : 'ready';
   return result;
 }
 
-function tryStart(app) {
-  if (app?.name && app?.commands?.start) {
+async function tryStart(app) {
+  if (app?.name && app?.commands?.start && !app?.proc) {
     console.log(`Starting app '${app.name}'...`);
     const cwd = path.resolve(APP_DIR, app.name);
     const args = app.commands.start.split(' ');
@@ -282,11 +283,13 @@ async function tryStop(app) {
   if (app?.name && app?.proc) {
     console.log(`Stopping app '${app.name}'...`);
     
+    const instance = app.proc;
     const startTime = performance.now();
     let running = true;
+    delete app.proc;
 
     const watch = new Promise(done => {
-      app.proc.on('exit', (code, signal) => {
+      instance.on('exit', (code, signal) => {
         const runTime = Math.floor(performance.now() - startTime);
         console.log(`Process stoped in ${runTime}ms (code ${code} - ${signal})`);
         running = false;
@@ -296,15 +299,15 @@ async function tryStop(app) {
     
     const escalation = async () => {
       console.log('Sending SIGINT...');
-      app.proc.kill('SIGINT');
+      instance.kill('SIGINT');
       await sleep(3000);
       if (running) {
         console.log('Sending SIGTERM...');
-        app.proc.kill('SIGTERM');
+        instance.kill('SIGTERM');
         await sleep(3000);
         if (running) {
           console.log('Sending SIGKILL...');
-          app.proc.kill('SIGKILL');
+          instance.kill('SIGKILL');
           await sleep(3000);
           if (running) {
             throw Error(`Unable to kill process for '${app.name}'`);
