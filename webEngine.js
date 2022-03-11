@@ -35,8 +35,8 @@ function create() {
 
     if (app) {
       if (app.status !== 'updating') {
-        const result = await releaseManager.getInfo(app);
-        console.dir(result, { depth: null });
+        const result = await releaseManager.getInfo(app, wss);
+        //console.dir(result, { depth: null });
         res.send(result);
       }
       else {
@@ -54,8 +54,8 @@ function create() {
 
     if (app) {
       if (app.status !== 'updating') {
-        releaseManager.install(app, req.params.tag);
-        res.send({ message: 'Update in progress' });
+        releaseManager.install(app, req.params.tag, wss);
+        res.status(202).end();
       }
       else {
         res.status(400).send({ message: 'App is currently updating' });
@@ -65,8 +65,6 @@ function create() {
       res.status(404).send({ message: 'App not found' });
     }
   });
-
-  server.pro
 
   return {
     server,

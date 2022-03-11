@@ -18,6 +18,16 @@ const lstat = filePath => new Promise(r => fs.lstat(filePath, (_, data) => r(dat
 const mkdir = filePath => new Promise(r => fs.mkdir(filePath, r));
 const rm = filePath => new Promise(r => rimraf(filePath, r));
 
+const getUpdater = (ws, target, operation) => progress => {
+  if ((ws?.clients?.size || 0) > 0) {    
+    ws.clients.forEach(client => {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify({ target, operation, progress }));
+      }
+    });
+  }
+}
+
 async function readJson(filePath, encoding = 'utf8') {
   if (fs.existsSync(filePath)) {
     const rawData = await readFile(filePath, encoding);
@@ -108,8 +118,10 @@ async function githubApi(app, uri, saveDest) {
   return result;
 }
 
-async function getInfo(app) {
+async function getInfo(app, ws) {
+  const progress = getUpdater(ws, app?.name, 'get-info');
   const result = {};
+  progress(0);
   await mkdir(APP_DIR);
 
   if (app?.name && app?.source) {
@@ -117,6 +129,7 @@ async function getInfo(app) {
     const localVersion = await readJson(path.resolve(APP_DIR, app.name, '_VERSION'));
     result.local = {};
     result.remote = {};
+    progress(10);
 
     if (localVersion?.tag) {
       console.log(`Local version: ${localVersion.tag}`);
@@ -134,6 +147,7 @@ async function getInfo(app) {
     }
 
     const releaseInfo = await githubApi(app, '/releases');
+    progress(95);
 
     if (releaseInfo.data && releaseInfo.data.length > 0) {
       const releases = releaseInfo.data.sort((a, b) => b.id - a.id).map(x => ({
@@ -160,15 +174,19 @@ async function getInfo(app) {
     result.failed = true;
   }
 
+  progress(100);
   return result;
 }
 
-async function install(app, release) {
+async function install(app, release, ws) {
+  const progress = getUpdater(ws, app?.name, 'install');
   const result = {};
+  progress(0);
 
   if (app?.name && app?.source) {
     app.status = 'updating';
     const currentState = await getInfo(app);
+    progress(15);
 
     if ((currentState?.remote?.all || []).length > 0) {
       const releaseList = currentState.remote.all;
@@ -190,10 +208,12 @@ async function install(app, release) {
           console.log('Cleaning workspace...');
           await rm(WORK_DIR);
           await mkdir(WORK_DIR);
+          progress(20);
 
           console.log('Fetching manifest...');
 
           const assetInfo = await githubApi(app, `/releases/${releaseTarget.id}/assets`);
+          progress(40);
 
           if (assetInfo.data && assetInfo.data.length > 0) {
             for (let i = 0; i < assetInfo.data.length; i++) {
@@ -211,9 +231,11 @@ async function install(app, release) {
             console.error('Unable to fetch assets for this version');
             result.failed = true;
           }
+          progress(60);
 
           if (!result.failed) {
             await tryStop(app);
+            progress(70);
 
             console.log('Replacing old version...');
             const appBase = path.resolve(APP_DIR, app.name);
@@ -226,6 +248,7 @@ async function install(app, release) {
               const test = await exec(app.commands.setup, appBase);
               console.dir(test, { depth: null });
             }
+            progress(90);
         
             console.log('Tagging new copy...');
             const versionFile = path.resolve(appBase, '_VERSION');
@@ -262,6 +285,7 @@ async function install(app, release) {
   }
 
   app.status = result.failed ? 'missing' : 'ready';
+  progress(100);
   return result;
 }
 
