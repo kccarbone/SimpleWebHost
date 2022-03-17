@@ -3,4 +3,5 @@ node_modules/
 __installer/
 apps/
 _VERSION
+config/
 config.json
